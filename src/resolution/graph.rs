@@ -54,6 +54,63 @@ pub enum NpmResolutionError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
 struct NodeId(u32);
 
+/// The node ids will grown from 0 to N, so considering this is
+/// a single pass we can instead use a vector instead of a hashmap
+/// and index on the increasing NodeId instead of looking up values
+/// in a hashmap.
+struct NodeIdMap<TValue> {
+  len: usize,
+  data: Vec<Option<TValue>>,
+}
+
+impl<TValue> Default for NodeIdMap<TValue> {
+  fn default() -> Self {
+    Self {
+      len: 0,
+      data: Default::default(),
+    }
+  }
+}
+
+impl<TValue> NodeIdMap<TValue> {
+  pub fn get(&self, key: NodeId) -> Option<&TValue> {
+    self
+      .data
+      .get(key.0 as usize)
+      .as_ref()
+      .and_then(|v| v.as_ref())
+  }
+
+  pub fn get_mut(&mut self, key: NodeId) -> Option<&mut TValue> {
+    self.data.get_mut(key.0 as usize).and_then(|v| v.as_mut())
+  }
+
+  pub fn insert(&mut self, key: NodeId, value: TValue) -> Option<TValue> {
+    let index = key.0 as usize;
+    if index >= self.data.len() {
+      self.data.resize_with(index + 1, || None);
+    }
+    let result = std::mem::replace(&mut self.data[index], Some(value));
+    if result.is_none() {
+      self.len += 1;
+    }
+    result
+  }
+
+  #[inline(always)]
+  pub fn len(&self) -> usize {
+    self.len
+  }
+
+  pub fn keys(&self) -> impl Iterator<Item = NodeId> + '_ {
+    self
+      .data
+      .iter()
+      .enumerate()
+      .filter_map(|(i, v)| v.as_ref().map(|_| NodeId(i as u32)))
+  }
+}
+
 /// A resolved package in the resolution graph.
 #[derive(Debug)]
 struct Node {
@@ -152,7 +209,7 @@ impl ResolvedId {
 /// at sharing nodes.
 #[derive(Default)]
 struct ResolvedNodeIds {
-  node_to_resolved_id: HashMap<NodeId, (ResolvedId, u64)>,
+  node_to_resolved_id: NodeIdMap<(ResolvedId, u64)>,
   resolved_to_node_id: HashMap<u64, NodeId>,
 }
 
@@ -170,7 +227,7 @@ impl ResolvedNodeIds {
   }
 
   pub fn get(&self, node_id: NodeId) -> Option<&ResolvedId> {
-    self.node_to_resolved_id.get(&node_id).map(|(id, _)| id)
+    self.node_to_resolved_id.get(node_id).map(|(id, _)| id)
   }
 
   pub fn get_node_id(&self, resolved_id: &ResolvedId) -> Option<NodeId> {
@@ -325,7 +382,7 @@ pub struct Graph {
   /// when creating the snapshot.
   root_packages: BTreeMap<Rc<PackageNv>, NodeId>,
   package_name_versions: HashMap<String, HashSet<Version>>,
-  nodes: HashMap<NodeId, Node>,
+  nodes: NodeIdMap<Node>,
   resolved_node_ids: ResolvedNodeIds,
   // This will be set when creating from a snapshot, then
   // inform the final snapshot creation.
@@ -529,7 +586,7 @@ impl Graph {
           })
         }
         GraphPathNodeOrRoot::Node(parent_path) => {
-          self.nodes.get(&parent_path.node_id()).and_then(|parent| {
+          self.nodes.get(parent_path.node_id()).and_then(|parent| {
             parent
               .children
               .values()
@@ -578,7 +635,7 @@ impl Graph {
   }
 
   fn borrow_node_mut(&mut self, node_id: NodeId) -> &mut Node {
-    self.nodes.get_mut(&node_id).unwrap()
+    self.nodes.get_mut(node_id).unwrap()
   }
 
   fn set_child_of_parent_node(
@@ -599,7 +656,7 @@ impl Graph {
     let packages_to_pkg_ids = self
       .nodes
       .keys()
-      .map(|node_id| (*node_id, self.get_npm_pkg_id(*node_id)))
+      .map(|node_id| (node_id, self.get_npm_pkg_id(node_id)))
       .collect::<HashMap<_, _>>();
     let mut copy_index_resolver =
       SnapshotPackageCopyIndexResolver::from_map_with_capacity(
@@ -627,7 +684,7 @@ impl Graph {
     }
 
     while let Some((node_id, pkg_id)) = pending.pop_front() {
-      let node = self.nodes.get(&node_id).unwrap();
+      let node = self.nodes.get(node_id).unwrap();
 
       packages_by_name
         .entry(pkg_id.nv.name.clone())
@@ -738,7 +795,7 @@ impl Graph {
     );
 
     if show_children {
-      let node = self.nodes.get(&node_id).unwrap();
+      let node = self.nodes.get(node_id).unwrap();
       eprintln!("       Children:");
       for (specifier, child_id) in &node.children {
         eprintln!("         {}: {}", specifier, child_id.0);
@@ -754,7 +811,6 @@ impl Graph {
       .resolved_node_ids
       .node_to_resolved_id
       .keys()
-      .copied()
       .collect::<Vec<_>>();
     node_ids.sort_by(|a, b| a.0.cmp(&b.0));
     for node_id in node_ids {
@@ -950,7 +1006,7 @@ impl<'a, TNpmRegistryApi: NpmRegistryApi>
     while let Some(parent_path) = self.pending_unresolved_nodes.pop_front() {
       let (parent_nv, child_deps) = {
         let node_id = parent_path.node_id();
-        if self.graph.nodes.get(&node_id).unwrap().no_peers {
+        if self.graph.nodes.get(node_id).unwrap().no_peers {
           // We can skip as there's no reason to analyze this graph segment further.
           continue;
         }
@@ -1003,7 +1059,7 @@ impl<'a, TNpmRegistryApi: NpmRegistryApi>
         match dep.kind {
           NpmDependencyEntryKind::Dep => {
             let parent_id = parent_path.node_id();
-            let node = self.graph.nodes.get(&parent_id).unwrap();
+            let node = self.graph.nodes.get(parent_id).unwrap();
             let child_id = match node.children.get(&dep.bare_specifier) {
               Some(child_id) => {
                 // this dependency was previously analyzed by another path
@@ -1223,7 +1279,7 @@ impl<'a, TNpmRegistryApi: NpmRegistryApi>
       let parent = path.previous_node.as_ref().unwrap().clone();
       Ok(Some((parent, node_id)))
     } else {
-      let node = self.graph.nodes.get(&node_id).unwrap();
+      let node = self.graph.nodes.get(node_id).unwrap();
       let children = node
         .children
         .iter()
