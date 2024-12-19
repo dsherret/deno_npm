@@ -65,22 +65,19 @@ struct NodeIdMap<TValue> {
 
 impl<TValue> Default for NodeIdMap<TValue> {
   fn default() -> Self {
-    Self {
-      len: 0,
-      data: Default::default(),
-    }
+    let mut data = Vec::new();
+    data.resize_with(4096, || None);
+    Self { len: 0, data: data }
   }
 }
 
 impl<TValue> NodeIdMap<TValue> {
+  #[inline(always)]
   pub fn get(&self, key: NodeId) -> Option<&TValue> {
-    self
-      .data
-      .get(key.0 as usize)
-      .as_ref()
-      .and_then(|v| v.as_ref())
+    self.data.get(key.0 as usize).and_then(|v| v.as_ref())
   }
 
+  #[inline(always)]
   pub fn get_mut(&mut self, key: NodeId) -> Option<&mut TValue> {
     self.data.get_mut(key.0 as usize).and_then(|v| v.as_mut())
   }
@@ -88,7 +85,7 @@ impl<TValue> NodeIdMap<TValue> {
   pub fn insert(&mut self, key: NodeId, value: TValue) -> Option<TValue> {
     let index = key.0 as usize;
     if index >= self.data.len() {
-      self.data.resize_with(index + 1, || None);
+      self.data.resize_with(index + 1024, || None);
     }
     let result = std::mem::replace(&mut self.data[index], Some(value));
     if result.is_none() {
@@ -103,8 +100,7 @@ impl<TValue> NodeIdMap<TValue> {
   }
 
   pub fn keys(&self) -> impl Iterator<Item = NodeId> + '_ {
-    self
-      .data
+    self.data[..self.len]
       .iter()
       .enumerate()
       .filter_map(|(i, v)| v.as_ref().map(|_| NodeId(i as u32)))

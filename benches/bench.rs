@@ -15,7 +15,7 @@ mod resolution {
   fn test() {
     let api = TestNpmRegistryApi::default();
     let mut initial_pkgs = Vec::new();
-    const VERSION_COUNT: usize = 25;
+    const VERSION_COUNT: usize = 100;
     for pkg_index in 0..26 {
       let pkg_name = format!("a{}", pkg_index);
       let next_pkg = format!("a{}", pkg_index + 1);
