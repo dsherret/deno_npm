@@ -383,9 +383,6 @@ pub trait NpmRegistryApi {
 /// A simple in-memory implementation of the NpmRegistryApi
 /// that can be used for testing purposes. This does not use
 /// `#[cfg(test)]` because that is not supported across crates.
-///
-/// Note: This test struct is not thread safe for setup
-/// purposes. Construct everything on the same thread.
 #[derive(Clone, Default, Debug)]
 pub struct TestNpmRegistryApi {
   package_infos: Rc<RefCell<HashMap<String, NpmPackageInfo>>>,
